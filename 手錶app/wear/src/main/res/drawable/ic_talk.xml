@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 跟阿寶說（手錶）：麥克風。
+     👤 使用者 10-17：金色跟「記一筆」撞色了，改紫色（阿寶的顏色）。
+     形狀也不同（麥克風 vs 書籤），縮小還是分得出來。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#9B6DD6" android:pathData="M0,0h108v108h-108z"/>
+    <path android:fillColor="#0B0F0E"
+        android:pathData="M54,18 A12,12 0 0,1 66,30 L66,54 A12,12 0 0,1 42,54 L42,30 A12,12 0 0,1 54,18 Z"/>
+    <path android:fillColor="#0B0F0E"
+        android:pathData="M32,50 L38,50 A16,16 0 0,0 70,50 L76,50 A22,22 0 0,1 57,71.6 L57,80 L68,80 L68,86 L40,86 L40,80 L51,80 L51,71.6 A22,22 0 0,1 32,50 Z"/>
+</vector>

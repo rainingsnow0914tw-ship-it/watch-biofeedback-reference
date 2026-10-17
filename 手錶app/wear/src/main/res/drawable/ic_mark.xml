@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 記一筆（手錶）：書籤／標記。
+     刻意跟橋接那個**形狀完全不同**（實心塊 vs 線條）而不是只換顏色 ——
+     手錶圖示縮到很小的時候，形狀分得出來，顏色分不出來。
+     底色也換成暖色，遠遠看就知道是哪一個。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#E8A33D" android:pathData="M0,0h108v108h-108z"/>
+    <path android:fillColor="#0B0F0E"
+        android:pathData="M36,20 L72,20 A6,6 0 0,1 78,26 L78,88 L54,70 L30,88 L30,26 A6,6 0 0,1 36,20 Z"/>
+</vector>

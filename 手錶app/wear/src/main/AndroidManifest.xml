@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 宣告這是手錶 app。沒有這行，系統會當成手機 app -->
+    <uses-feature android:name="android.hardware.type.watch" />
+
+    <!-- 讀心率必要。可以用 adb 授：
+         adb -s <watch> shell pm grant com.example.watchbridge android.permission.BODY_SENSORS -->
+    <uses-permission android:name="android.permission.BODY_SENSORS" />
+    <!-- 螢幕關著也要繼續量的話需要這個（Android 12 以上） -->
+    <uses-permission android:name="android.permission.BODY_SENSORS_BACKGROUND" />
+    <!-- 之後要把資料送到電腦時用得到 -->
+    <!-- 加速度計要這兩個。2026-08-13 實測：只有 BODY_SENSORS 的話，
+         ACCELEROMETER_CONTINUOUS 會直接回 PERMISSION_ERROR。
+         · ACTIVITY_RECOGNITION      —— 動作偵測（執行時權限，要 grant）
+         · HIGH_SAMPLING_RATE_SENSORS —— Android 12 起，高於 200Hz 的取樣要它 -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- 長駐收集服務。沒有這幾個，螢幕一暗系統就把 app 凍結，
+         「戴著就會收」這件事會變成假的（2026-08-13 實測過）。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
+    <!-- 常駐通知是系統判斷「這 app 在做正事」的依據，不是裝飾 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 重開機之後自己爬起來。沒有這個，手錶重開一次收集就永遠停了，
+         而且**完全看不出來**（錶面正常、圖示在、沒有錯誤）。
+         2026-08-15 稽核查出來的漏洞。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- ⚠ 2026-08-16 補上。**這行原本不存在，而程式早就在呼叫 Vibrator。**
+         後果：震動被系統擋掉，但呼叫包在 runCatching 裡 —— **安靜地失敗**。
+         我早上「驗證」記一筆的時候只確認了資料有寫進檔案，
+         **沒有確認手腕有沒有感覺到**，所以完全沒發現。
+
+         這件事的嚴重性在於：**震動是警報唯一的輸出通道**。
+         沒有這行，之後做的警報會是一個完全靜音的警報器 ——
+         程式跑得好好的、日誌寫著「已通知」，而人什麼都感覺不到。 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- 讀手錶上的錄音檔，才能走藍牙把它送到手機（2026-08-26 使用者 提的）。
+         在此之前錄音只能靠 adb 撈，而無線偵錯會自己關 ——
+         結果她 08-25 錄的兩筆躺在錶上沒人撈，程式還說「沒有錄音檔」。
+         ⚠ 這是 runtime 權限，裝完要 `pm grant`，不然 scan() 會靜靜地看不到東西。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- 2026-10-17 跟阿寶說：app 自己用 SpeechRecognizer 聽（不開 Google 畫面），要麥克風。
+         裝完用 adb 授：adb shell pm grant com.example.watchbridge android.permission.RECORD_AUDIO -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- 警報階梯要排「15~20 分鐘後再一輪」。Android 14 以上不宣告這個，
+         排程會被直接拒絕 —— 而且是排的時候才拒，不是啟動時。 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+
+    <!-- 警報要在背景把「妳還好嗎」整頁彈出來，不能只發一則會被滑掉的通知。 -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!-- ⚠ 2026-08-17 05:22 加。**這是警報畫面唯一走得通的路。**
+         這支錶（Watch5 Pro / One UI 8 / Android 14）**完全禁止背景啟動 Activity**：
+           · 前景服務直接 startActivity          → BAL_BLOCK
+           · 走全螢幕通知讓系統代發（正規做法）  → 一樣 BAL_BLOCK
+             （日誌顯示 balAllowedByPiCreator=ALLOW_BAL、balAllowedByPiSender=ALLOW_BAL，
+               而 resultIfPiSenderAllowsBal=BAL_BLOCK —— 兩邊都說可以，結果還是擋）
+         連 Samsung 自己的 wearable.sysui 代發都被否決。
+
+         覆蓋視窗是**不經過 Activity** 的，BAL 那套規則管不到它。
+         代價：這個權限要手動授予（設定裡找不到就用 adb），恢復原廠要重下。
+             adb shell appops set com.example.watchbridge SYSTEM_ALERT_WINDOW allow -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_bridge"
+        android:label="阿寶橋接"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault">
+
+        <uses-library
+            android:name="com.google.android.wearable"
+            android:required="false" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="阿寶橋接"
+            android:keepScreenOn="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 「記一筆」。exported=true 是必要的 ——
+             錶冠按兩下的自訂按鍵設定只列得出可以被外部啟動的 activity。
+             taskAffinity 留空 + excludeFromRecents：按完就結束，
+             不要留在最近工作列裡擋路。 -->
+        <!-- ⚠ 2026-08-20 加 launchMode="singleTask"，修的是 使用者 實測到的 bug：
+             「按紅色鍵兩下會出現記一筆沒錯，但記完之後又再出現一次」
+
+             查證：dumpsys 顯示同一個 task #15 裡疊了兩個 MarkActivity
+                 Hist #1: ActivityRecord{1708485  ...}   上面那個
+                 Hist #0: ActivityRecord{142417238 ...}  下面還有一個
+             launchMode 原本是預設的 standard，所以每次啟動都新開一個實例
+             疊上去；她把最上面那個關掉，下面那個就露出來。
+
+             singleTask = 再收到啟動意圖時重用既有實例，並清掉它上面的東西。
+             配合程式裡的 finishAndRemoveTask() 一起修。 -->
+        <activity
+            android:name=".MarkActivity"
+            android:exported="true"
+            android:icon="@drawable/ic_mark"
+            android:label="記一筆"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 2026-10-17 手腕對講機（👤 使用者 的設計）。
+             TalkActivity：她按一下 → 系統辨識器把話變文字 → MessageClient /said 到手機。
+             SayService：手機 /say 送一句話來 → 震一下 → 錶的語音引擎唸出來 ＋ 一則通知。
+             ⚠ MESSAGE_RECEIVED 的 pathPrefix 跟 WearReceiver 那條一樣：
+               少宣告一行就整條路安靜不通，不會有任何錯誤訊息。 -->
+        <activity
+            android:name=".TalkActivity"
+            android:exported="true"
+            android:icon="@drawable/ic_talk"
+            android:label="跟阿寶說"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- 阿寶音量（跟阿寶說裡那顆 🔊）。只有自己叫得到。 -->
+        <activity
+            android:name=".VoiceVolumeActivity"
+            android:exported="false"
+            android:label="阿寶音量"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity="" />
+        <!-- 阿寶說的話那張卡（10-18 改成真正畫面：實體鍵收、捲動原生、不滑掉） -->
+        <activity
+            android:name=".SayCardActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:theme="@style/SayCardTheme" />
+        <service
+            android:name=".SayService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/say" />
+            </intent-filter>
+        </service>
+
+        <!-- 監聽三星原生跌倒偵測發出的通知。
+             這是目前找到**唯一能即時拿到那個訊號**的管道 ——
+             safety_assistance 有 SOS 通知頻道（mId=8280），而通知是推播不是輪詢。
+
+             ⚠ 授權要用 adb（手錶上那個設定頁很難找）：
+               adb shell cmd notification allow_listener                  com.example.watchbridge/com.example.watchbridge.FallWatcher
+             恢復原廠或重新配對之後要重下一次。 -->
+        <service
+            android:name=".FallWatcher"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- 警報畫面。紅底黃字的 HELP ＋「敲螢幕三下停止警報」跑馬燈。
+             這個畫面的讀者**不是配戴者**，是扶起他的那個陌生人 —— 見 AlarmActivity 檔頭。
+
+             · showWhenLocked / turnScreenOn：螢幕是黑的、錶還鎖著也要亮起來
+             · excludeFromRecents：警報不該留在最近工作列裡
+             · exported=false：只有自己叫得動，不需要外部啟動
+             · launchMode=singleTask：連續觸發不要疊出好幾層關不完 -->
+        <activity
+            android:name=".AlarmActivity"
+            android:exported="false"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleTask"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
+        <service
+            android:name=".CollectorService"
+            android:exported="false"
+            android:foregroundServiceType="health" />
+
+        <!-- ⚠ 這裡**刻意不用** directBootAware / LOCKED_BOOT_COMPLETED。
+             那兩個會讓接收器在「開機了但還沒解鎖」時就跑，
+             但 CollectorService 要寫的 filesDir 屬於憑證加密儲存區，
+             **解鎖前根本掛載不到** —— 服務會起來然後寫檔全部失敗，
+             而且是安靜地失敗。
+             要支援解鎖前收集，得整個改用 device-protected storage，
+             那是另一件事，現在不做。 -->
+        <!-- 2026-09-17：週日體重提醒的測試入口。不收參數，被亂觸發最多就是輕震兩下。 -->
+        <receiver
+            android:name=".體重提醒測試"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.watchbridge.TEST_WEIGHT" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 傳送用的鬧鐘。**一定要在這裡宣告**：
+             AlarmManager 的 PendingIntent 要送到一個「系統認得的元件」，
+             動態註冊的 receiver 跟著行程一起死，行程沒了鬧鐘就送不到 ——
+             而「行程被系統收掉」正是要撐過去的情況之一。
+
+             exported=false：只有系統的鬧鐘會叫它，不需要別的 app 叫得到。 -->
+        <receiver
+            android:name=".SendAlarm"
+            android:enabled="true"
+            android:exported="false" />
+    </application>
+
+</manifest>

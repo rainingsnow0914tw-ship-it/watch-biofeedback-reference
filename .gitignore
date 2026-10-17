@@ -1,0 +1,19 @@
+# 原始生理資料、日記、快照永遠不進公開倉庫
+生理資料/
+日記/
+真實案例/
+outputs/
+三星SDK/
+**/libs/*.aar
+**/build/
+.gradle/
+.kotlin/
+local.properties
+__pycache__/
+*.pyc
+*.apk
+*.jsonl
+*.log
+*.bak*
+config/*.json
+!config/*.example.json

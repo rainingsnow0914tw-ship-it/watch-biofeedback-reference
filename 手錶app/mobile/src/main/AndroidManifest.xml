@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- ⚠ 2026-08-14 改：本來用 FOREGROUND_SERVICE_DATA_SYNC，**那是錯的類型**。
+         Android 15 給 dataSync 設了「24 小時內總共只能跑 6 小時」的上限，
+         超過系統就呼叫 onTimeout()，沒在幾秒內自己停掉就 ANR：
+             "A foreground service of dataSync did not stop within its timeout"
+         使用者 睡了十幾個小時，服務就是這樣被砍掉的。
+
+         connectedDevice 才是對的類型 —— 我們做的事情就是「跟一台連著的裝置互動」，
+         而且它**不在那個 6 小時的限制清單裡**。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- connectedDevice 類型要求至少持有其中一個連線類權限 -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- /ring 使用鬧鐘音訊屬性，不受一般響鈴／靜音模式控制；震動是 normal permission。 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 重開機之後自己爬起來。沒有這個，手機重開一次電腦就再也連不上，
+         而且看不出來 —— 手錶照樣在收，只是我拿不到。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- ── Health Connect（2026-08-30 加）────────────────────────────
+         為什麼要讀這些：**三星自己判好的睡眠**在這裡，而我們自己那套睡眠偵測是壞的
+         （心率撐不到 3 分鐘低於當日 p25，見 跨框交接.md 2026-08-30）。
+
+         更重要的是它解掉一個設計錯誤：本來要 👤 使用者 手動按「睡覺」「起床」，
+         但她 08-30 說「我最近有點恍惚，老是忘記壓，不然就是累到直接睡著」——
+         **要求一個正在睡著和剛醒來的人按按鈕，是設計錯了，不是她的錯。**
+         而家人將來更按不到。這兩顆按鈕該退休，改吃三星的判讀。
+
+         ⚠ 這些是 runtime 權限，安裝完不會自己有。要嘛使用者在 Health Connect
+         裡面授權，要嘛用 adb `pm grant`（我們走 adb，不打擾她）。 -->
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_OXYGEN_SATURATION" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_bridge_phone"
+        android:label="阿寶橋接"
+        android:theme="@android:style/Theme.DeviceDefault">
+
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- ⚠ Health Connect 規定：沒有這個 intent-filter，
+                 系統**不會**把 health 權限給這個 app，而且不會說為什麼。
+                 （這跟 08-26 漏掉 /audio pathPrefix 是同一類坑：
+                   宣告漏了，程式再對也沒用，兩邊都不報錯。） -->
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+
+        <!-- Android 14+ 走這個別名式宣告 -->
+        <activity-alias
+            android:name="ViewPermissionUsageActivity"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+
+        <!-- 收手錶送過來的資料。Wearable Data Layer 會自己叫醒它，
+             不需要常駐，也不用使用者打開 app。 -->
+        <service
+            android:name=".WearReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/bio" />
+                <!-- ⚠ 2026-08-26：**這一行漏掉會安靜地整條路不通。**
+                     手錶那邊 log 印「錄音已交給資料層」、手機的 onDataChanged
+                     也寫好了 /audio 的處理 —— 但 manifest 只訂閱 /bio，
+                     所以 WearableListenerService 根本不會被叫起來，
+                     **兩邊都沒有任何錯誤訊息**。
+                     加路徑到資料層是「宣告」不是「程式」，很容易只改程式忘了改宣告。 -->
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/audio" />
+            </intent-filter>
+            <!-- 2026-10-17 手腕對講機：錶把她說的話（文字）用 MessageClient 送 /said 過來。
+                 同一支 service，但 MESSAGE_RECEIVED 是另一個 action，要另外一個 intent-filter。 -->
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/said" />
+            </intent-filter>
+        </service>
+
+        <!-- 讓電腦來拿資料的小伺服器 -->
+        <service
+            android:name=".BridgeServer"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- 看門狗。exported=true 是為了讓我能用 adb 手動觸發做驗證 ——
+             沒有這個就只能等 15 分鐘才知道它對不對。
+             它不接受任何參數，被亂觸發最多就是多檢查一次。 -->
+        <receiver
+            android:name=".StaleWatchdog"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.watchbridge.WATCHDOG" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 同手錶端：刻意不用 directBootAware，解鎖前 filesDir 掛載不到。 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

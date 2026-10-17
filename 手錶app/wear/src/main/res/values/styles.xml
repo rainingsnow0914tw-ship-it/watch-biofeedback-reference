@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 阿寶卡片：關掉 Wear 的「右滑關閉」（👤 10-17「一滑就不見了」），只有 ✕ 跟實體鍵會收 -->
+    <style name="SayCardTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+        <item name="android:windowSwipeToDismiss">false</item>
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>
