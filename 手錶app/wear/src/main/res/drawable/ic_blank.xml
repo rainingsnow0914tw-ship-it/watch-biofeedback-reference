@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     （拿掉 OngoingActivity 收集會被凍住），而且會自己出現、消失（重裝程式時會重新掛上）。
+     外圍黑圓：三星會在後面墊白底。顏色 #f7a8c4＝錶面兩點鐘小腳印。
+     試過：全透明 → 淺灰圓盤；紫圓白麥克風 → 白底紫方塊很怪；全黑 → 細灰邊；小花麥克風 → 跟大按鈕撞衫。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M12,-2a14,14 0,1 1,0 28a14,14 0,1 1,0 -28z" />
+    <!-- 四顆趾頭 -->
+    <path
+        android:fillColor="#FFF7A8C4"
+        android:pathData="M4.6,10.6a1.9,2.4 0,1 1,3.8,0a1.9,2.4 0,1 1,-3.8,0zM8.3,6.9a2,2.6 0,1 1,4,0a2,2.6 0,1 1,-4,0zM11.7,6.9a2,2.6 0,1 1,4,0a2,2.6 0,1 1,-4,0zM15.6,10.6a1.9,2.4 0,1 1,3.8,0a1.9,2.4 0,1 1,-3.8,0z" />
+    <!-- 掌心肉球 -->
+    <path
+        android:fillColor="#FFF7A8C4"
+        android:pathData="M12,11.2C14.2,11.2 16.4,13.6 17,15.6C17.6,17.8 16.2,19.4 14,19.4C13.2,19.4 12.6,19 12,19C11.4,19 10.8,19.4 10,19.4C7.8,19.4 6.4,17.8 7,15.6C7.6,13.6 9.8,11.2 12,11.2z" />
+</vector>
