@@ -113,6 +113,12 @@ class StaleWatchdog : BroadcastReceiver() {
                 .onFailure { Log.e(TAG, "橋接服務叫不起來", it) }
         }
 
+        // 錶連著但資料卡住 → 先回頭掃一遍沒收走的（見 WearReceiver.sweep）。
+        if (watchConnected == true) {
+            val app = ctx.applicationContext
+            Thread { runCatching { WearReceiver.sweep(app) }.onFailure { Log.w(TAG, "sweep failed", it) } }.start()
+        }
+
         when (level) {
             "loud" -> notify(
                 ctx, NotificationManager.IMPORTANCE_HIGH,

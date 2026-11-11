@@ -307,6 +307,13 @@ class BridgeServer : Service() {
                 else send("404 Not Found",
                     """{"error":"$d 還沒有摘要（加 &build=1 可以當場算）"}""".toByteArray())
             }
+            path.startsWith("/sweep") -> {
+                // 電腦可以主動叫手機「現在就回頭掃一遍沒收走的」，不用等卡住偵測的下一輪。
+                val r = runCatching { WearReceiver.sweep(applicationContext) }
+                val body = org.json.JSONObject().put("ok", r.isSuccess).put("recovered", r.getOrDefault(-1))
+                r.exceptionOrNull()?.let { body.put("error", it.javaClass.simpleName + ": " + (it.message ?: "")) }
+                send("200 OK", body.toString().toByteArray())
+            }
             path.startsWith("/sleep") -> {
                 // 三星自己判好的睡眠。**這是我們自己的 app 直接讀 Health Connect** ——
                 //

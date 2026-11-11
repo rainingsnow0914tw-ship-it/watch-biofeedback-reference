@@ -1,6 +1,8 @@
 package com.example.watchbridge.phone
 
+import android.content.Context
 import android.util.Log
+import com.google.android.gms.wearable.DataItem
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.DataMapItem
@@ -27,17 +29,10 @@ import java.util.Locale
  */
 class WearReceiver : WearableListenerService() {
 
-    private val nodeNames = mutableMapOf<String, String>()
-
-    private fun watchFileName(day: String, node: String): String {
-        val name = nodeNames.getOrPut(node) {
-            runCatching {
-                Tasks.await(Wearable.getNodeClient(applicationContext).connectedNodes)
-                    .firstOrNull { it.id == node }?.displayName
-            }.getOrNull() ?: node
-        }
-        if (name.contains("Ultra", ignoreCase = true) || node.isEmpty()) return "$day.jsonl"
-        return "${day}_" + name.replace(Regex("[^\\p{L}\\p{N}]+"), "") + ".jsonl"
+    /** 服務一被叫起來就回頭掃一次沒收走的項目（見 companion 的 sweep）。 */
+    override fun onCreate() {
+        super.onCreate()
+        Thread { runCatching { sweep(applicationContext) }.onFailure { Log.w(TAG, "sweep on start failed", it) } }.start()
     }
 
     override fun onDataChanged(events: DataEventBuffer) {
@@ -54,61 +49,7 @@ class WearReceiver : WearableListenerService() {
             }
             if (!p.startsWith(PATH)) continue
 
-            val map = DataMapItem.fromDataItem(item).dataMap
-            val asset = map.getAsset("chunk") ?: continue
-            val day = map.getString("day") ?: today()
-            val lines = map.getInt("lines", -1)
-            // -1 代表這是舊格式的項目（沒帶位移）。舊項目還可能留在佇列裡，
-            // 所以不能假設一定有。
-            val offset = map.getLong("offset", -1L)
-
-            // 這裡刻意用 Tasks.await 而不是 coroutine：
-            // WearableListenerService 的 onDataChanged 本來就跑在背景執行緒上，
-            // 阻塞是安全的，而且省掉一整包 coroutine 相依。
-            val bytes = runCatching {
-                Tasks.await(
-                    Wearable.getDataClient(applicationContext).getFdForAsset(asset)
-                ).inputStream.use { it.readBytes() }
-            }.onFailure { Log.e(TAG, "讀不到 asset", it) }.getOrNull()
-            if (bytes == null) continue
-
-            val dir = File(filesDir, "手錶資料").apply { mkdirs() }
-            val f = File(dir, watchFileName(day, item.uri.host.orEmpty()))
-
-            //
-            //     append 有兩個問題，而且都不會報錯：
-            //       · 同一塊重送 → 內容被寫**兩次**（實測抓到過 2 行重複）
-            //       · 藍牙資料層**不保證送達順序** → 檔案裡的行會亂序
-            //
-            //     現在手錶把位移寫在項目裡，這裡就照著位移寫到**那個位置**。
-            //     於是這條路變成冪等的：
-            //       · 重送 = 用一模一樣的內容覆蓋同一段，無害
-            //       · 亂序 = 各自寫各自的位置，最後結果一樣
-            //
-            //     副作用：如果後面的塊先到，中間會暫時是一段 0x00。
-            //     那幾行 JSON 解析不了會被跳過，等前面的塊補上就自己好了。
-            val ok = runCatching {
-                if (offset >= 0) {
-                    java.io.RandomAccessFile(f, "rw").use { raf ->
-                        raf.seek(offset)
-                        raf.write(bytes)
-                    }
-                } else {
-                    f.appendBytes(bytes)      // 舊格式的殘留項目
-                }
-            }.onFailure { Log.e(TAG, "寫檔失敗", it) }.isSuccess
-
-            if (!ok) continue
-            Log.i(TAG, "收到 $day @$offset：${bytes.size} bytes / $lines 行 → ${f.length()}")
-
-            // 寫成功才刪。**刪掉之前一定要確定資料已經落地** ——
-            // 反過來的話，寫檔失敗又刪了項目，那塊就真的沒了。
-            //
-            // 非刪不可：資料層是有容量上限的共享空間，不清會一直堆到滿，
-            // 之後手錶那邊 putDataItem 就會開始失敗。
-            runCatching {
-                Tasks.await(Wearable.getDataClient(applicationContext).deleteDataItems(item.uri))
-            }.onFailure { Log.w(TAG, "刪不掉已處理的項目 ${item.uri}", it) }
+            handleBio(applicationContext, item)
         }
     }
 
@@ -186,5 +127,105 @@ class WearReceiver : WearableListenerService() {
         const val SAID_PATH = "/said"
         const val SAID_FILE = "她說的.jsonl"
         const val AUDIO_DIR = "錄音"   // filesDir 底下放手錶錄音的資料夾；BridgeServer /recordings 也讀這裡
+
+        private val nodeNames = mutableMapOf<String, String>()
+
+        fun fileNameFor(ctx: Context, day: String, node: String): String {
+            val name = nodeNames.getOrPut(node) {
+                runCatching {
+                    Tasks.await(Wearable.getNodeClient(ctx).connectedNodes)
+                        .firstOrNull { it.id == node }?.displayName
+                }.getOrNull() ?: node
+            }
+            if (name.contains("Ultra", ignoreCase = true) || node.isEmpty()) return "$day.jsonl"
+            return "${day}_" + name.replace(Regex("[^\\p{L}\\p{N}]+"), "") + ".jsonl"
+        }
+
+        /** 收一塊生理資料：讀 asset → 照位移寫檔 → 寫成功才刪。onDataChanged 與 sweep 共用。 */
+        @Synchronized
+        fun handleBio(ctx: Context, item: DataItem): Boolean {
+            val map = DataMapItem.fromDataItem(item).dataMap
+            val asset = map.getAsset("chunk") ?: return false
+            val day = map.getString("day") ?: SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+            val lines = map.getInt("lines", -1)
+            // -1 代表這是舊格式的項目（沒帶位移）。舊項目還可能留在佇列裡，
+            // 所以不能假設一定有。
+            val offset = map.getLong("offset", -1L)
+
+            // 這裡刻意用 Tasks.await 而不是 coroutine：
+            // WearableListenerService 的 onDataChanged 本來就跑在背景執行緒上，
+            // 阻塞是安全的，而且省掉一整包 coroutine 相依。
+            val bytes = runCatching {
+                Tasks.await(
+                    Wearable.getDataClient(ctx).getFdForAsset(asset)
+                ).inputStream.use { it.readBytes() }
+            }.onFailure { Log.e(TAG, "讀不到 asset", it) }.getOrNull()
+            if (bytes == null) return false
+
+            val dir = File(ctx.filesDir, "手錶資料").apply { mkdirs() }
+            val f = File(dir, fileNameFor(ctx, day, item.uri.host.orEmpty()))
+
+            //
+            //     append 有兩個問題，而且都不會報錯：
+            //       · 同一塊重送 → 內容被寫**兩次**（實測抓到過 2 行重複）
+            //       · 藍牙資料層**不保證送達順序** → 檔案裡的行會亂序
+            //
+            //     現在手錶把位移寫在項目裡，這裡就照著位移寫到**那個位置**。
+            //     於是這條路變成冪等的：
+            //       · 重送 = 用一模一樣的內容覆蓋同一段，無害
+            //       · 亂序 = 各自寫各自的位置，最後結果一樣
+            //
+            //     副作用：如果後面的塊先到，中間會暫時是一段 0x00。
+            //     那幾行 JSON 解析不了會被跳過，等前面的塊補上就自己好了。
+            val ok = runCatching {
+                if (offset >= 0) {
+                    java.io.RandomAccessFile(f, "rw").use { raf ->
+                        raf.seek(offset)
+                        raf.write(bytes)
+                    }
+                } else {
+                    f.appendBytes(bytes)      // 舊格式的殘留項目
+                }
+            }.onFailure { Log.e(TAG, "寫檔失敗", it) }.isSuccess
+
+            if (!ok) return false
+            Log.i(TAG, "收到 $day @$offset：${bytes.size} bytes / $lines 行 → ${f.length()}")
+
+            // 寫成功才刪。**刪掉之前一定要確定資料已經落地** ——
+            // 反過來的話，寫檔失敗又刪了項目，那塊就真的沒了。
+            //
+            // 非刪不可：資料層是有容量上限的共享空間，不清會一直堆到滿，
+            // 之後手錶那邊 putDataItem 就會開始失敗。
+            runCatching {
+                Tasks.await(Wearable.getDataClient(ctx).deleteDataItems(item.uri))
+            }.onFailure { Log.w(TAG, "刪不掉已處理的項目 ${item.uri}", it) }
+            return true
+        }
+
+        /**
+         * 回頭掃一遍資料層裡還沒收走的 /bio 項目。
+         *
+         * 為什麼需要：手機原本只在 onDataChanged（項目剛到的那一刻）收件。那一刻錯過了
+         * （例如手機和手錶分開一陣子、或 app 當時被系統休眠），項目就永遠留在資料層；
+         * 手錶端的背壓（佇列滿 40 塊就不再送）又讓它不再送新的，兩邊互等。
+         * 實際發生過一次：資料停了五個小時，重開手錶和重開 app 都沒用。
+         * 寫檔是照位移寫的，所以重複收是無害的。
+         */
+        fun sweep(ctx: Context): Int {
+            val buf = Tasks.await(Wearable.getDataClient(ctx).dataItems, 30, java.util.concurrent.TimeUnit.SECONDS)
+            var n = 0
+            var seen = 0
+            try {
+                for (item in buf) {
+                    if (!item.uri.path.orEmpty().startsWith(PATH)) continue
+                    seen++
+                    if (runCatching { handleBio(ctx, item) }.getOrDefault(false)) n++
+                }
+            } finally {
+                buf.release()
+            }
+            Log.i(TAG, "sweep: $seen pending, recovered $n")
+            return n
+        }
     }
 }
