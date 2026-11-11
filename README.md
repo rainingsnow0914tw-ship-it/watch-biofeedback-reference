@@ -6,6 +6,8 @@
 >
 > 程式碼照原樣分享。拿去改成你自己的，歡迎；出了事請自己負責。
 
+> **想一分鐘就試到？** 「腦」那一層已經抽成獨立的 B 版，不用手錶、不用金鑰就能玩：[watch-companion-brain](https://github.com/rainingsnow0914tw-ship-it/watch-companion-brain)。這個倉庫（A 版）是三星手錶整套的參考實作。
+
 ## 先看 85 秒
 
 [![示範影片封面](docs/demo/cover.png)](docs/demo/demo-short-85s.mp4)
