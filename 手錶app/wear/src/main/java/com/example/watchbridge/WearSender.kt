@@ -47,10 +47,28 @@ class WearSender(private val ctx: Context) {
         // 送不出去的項目會留在手錶的資料層裡。塞太多之後 putDataItem 會開始
         // 失敗，而失敗的樣子不保證漂亮。與其等它壞，不如自己先停手 ——
         // **資料本來就好好地留在手錶的檔案裡，晚點送不會少一個 byte。**
-        val pending = outstanding()
+        var pending = outstanding()
         if (pending >= MAX_PENDING) {
-            Log.w(TAG, "佇列已有 $pending 塊沒送達（手機大概不在），這次不送")
-            return 0
+            // 佇列滿了不一定是手機不在。實際發生過：手機就在旁邊、藍牙連著，錶卻一直說 40 塊沒送達，
+            // 而手機那邊看到的待收塊數是 0。錶帳上的這些項目手機根本沒有（藍牙斷線重連多次後兩邊對不上），
+            // 永遠不會被收走，背壓就永遠不放行。所以：滿了超過 STALE_FULL_MS 而且手機就在旁邊 →
+            // 把自己放的項目清掉，進度倒回最早那一塊重送。手機是照位移寫檔的，重送無害；手機真的不在就照舊等。
+            val nowMs = System.currentTimeMillis()
+            val since = prefs.getLong("full_since", 0L)
+            if (since == 0L) {
+                prefs.edit().putLong("full_since", nowMs).apply()
+            } else if (nowMs - since >= STALE_FULL_MS && phoneNearby()) {
+                val n = reclaimStale()
+                prefs.edit().remove("full_since").apply()
+                Log.w(TAG, "queue full for ${(nowMs - since) / 60000} min with phone nearby -> reclaimed $n stale items, rewinding offsets")
+                pending = outstanding()
+            }
+            if (pending >= MAX_PENDING) {
+                Log.w(TAG, "佇列已有 $pending 塊沒送達（手機大概不在），這次不送")
+                return 0
+            }
+        } else if (prefs.contains("full_since")) {
+            prefs.edit().remove("full_since").apply()
         }
 
         // 今天優先 —— 新資料對警報最重要。
@@ -89,6 +107,50 @@ class WearSender(private val ctx: Context) {
             client.dataItems, 15, java.util.concurrent.TimeUnit.SECONDS
         ).use { buf -> buf.count { it.uri.path.orEmpty().startsWith("/bio/") } }
     }.getOrDefault(0)
+
+    private fun phoneNearby(): Boolean = runCatching {
+        com.google.android.gms.tasks.Tasks.await(
+            Wearable.getNodeClient(ctx).connectedNodes, 10, java.util.concurrent.TimeUnit.SECONDS
+        ).any { it.isNearby }
+    }.getOrDefault(false)
+
+    /**
+     * 清掉這支錶自己放進資料層、卻一直沒被收走的 /bio 項目，並把各天的送出進度倒回最早那一塊。
+     * 項目路徑是 /bio/<日期>/<位移>，所以不用讀內容就知道要倒回哪裡。回傳清了幾塊。
+     */
+    private fun reclaimStale(): Int = runCatching {
+        val me = com.google.android.gms.tasks.Tasks.await(
+            Wearable.getNodeClient(ctx).localNode, 10, java.util.concurrent.TimeUnit.SECONDS
+        ).id
+        val mins = HashMap<String, Long>()
+        val uris = ArrayList<android.net.Uri>()
+        com.google.android.gms.tasks.Tasks.await(
+            client.dataItems, 15, java.util.concurrent.TimeUnit.SECONDS
+        ).use { buf ->
+            for (item in buf) {
+                val u = item.uri
+                val seg = u.pathSegments
+                if (seg.size != 3 || seg[0] != "bio" || u.host != me) continue
+                val off = seg[2].toLongOrNull() ?: continue
+                mins[seg[1]] = minOf(mins[seg[1]] ?: Long.MAX_VALUE, off)
+                uris.add(u)
+            }
+        }
+        for (u in uris) {
+            runCatching {
+                com.google.android.gms.tasks.Tasks.await(
+                    client.deleteDataItems(u), 15, java.util.concurrent.TimeUnit.SECONDS
+                )
+            }
+        }
+        val ed = prefs.edit()
+        for ((day, off) in mins) {
+            val key = "offset_$day"
+            if (prefs.getLong(key, 0L) > off) ed.putLong(key, off)
+        }
+        ed.apply()
+        uris.size
+    }.getOrElse { Log.w(TAG, "reclaimStale failed", it); 0 }
 
     /** 送某一天的下一塊。回傳送了幾個 byte。 */
     private fun sendDay(day: String): Int {
@@ -167,6 +229,9 @@ class WearSender(private val ctx: Context) {
     companion object {
         const val TAG = "WatchBridge"
         private const val CHUNK = 180_000L
+
+        /** 佇列滿了多久、而且手機就在旁邊，才判定那些項目不會有人收（見 sendOnce）。 */
+        private const val STALE_FULL_MS = 10 * 60_000L
 
         /**
          * 資料層裡最多容許幾塊沒送達。
